@@ -174,6 +174,8 @@ h2{font:500 2rem/1.1 var(--serif); margin:0 0 1.2rem}
 
 /* Xác nhận tham gia */
 .rsvp p{margin:0 0 1rem}
+.field{display:block; width:100%; font:inherit; font-size:16px; color:var(--ink); padding:.75rem .95rem; border-radius:12px; border:1px solid var(--line); background:var(--field); margin-bottom:1rem}
+.field:focus-visible{outline:2px solid var(--blush-deep); outline-offset:1px}
 .rsvp label{display:block; font-weight:600; font-size:.95rem; margin-bottom:.35rem}
 .rsvp textarea{
   width:100%; min-height:4.5rem; resize:vertical; font:inherit; color:var(--ink); padding:.7rem .9rem; border-radius:12px;
@@ -386,7 +388,11 @@ h2 small{display:block; font:500 .95rem/1.4 var(--sans); color:var(--muted); mar
       <h2 id="rsvp-h">Xác nhận tham gia</h2>
 
       <div id="rsvpForm">
-        <p>Nhấn nút bên dưới để chủ tiệc biết bạn sẽ đến.</p>
+        <p>Điền tên rồi nhấn nút để chủ tiệc biết bạn sẽ đến.</p>
+        <label for="fname">Họ và tên <span aria-hidden="true">*</span></label>
+        <input class="field" id="fname" type="text" autocomplete="name" maxlength="100" required>
+        <label for="dept">Bộ phận (không bắt buộc)</label>
+        <input class="field" id="dept" type="text" autocomplete="organization-title" maxlength="100">
         <button type="button" class="btn" id="confirm">Xác nhận tham gia</button>
       </div>
 
@@ -396,19 +402,6 @@ h2 small{display:block; font:500 .95rem/1.4 var(--sans); color:var(--muted); mar
       </div>
 
       <p class="status" id="status" role="status" aria-live="polite"></p>
-      <p class="tally" id="tally" hidden></p>
-
-      <div class="host" id="host" hidden>
-        <h3>Danh sách đã xác nhận</h3>
-        <p class="sub">Chỉ bạn (chủ tiệc) thấy phần này. Mỗi xác nhận mới được tự đẩy sang Google Sheet.</p>
-        <ul class="guests" id="guests"></ul>
-        <p class="sub" id="noGuests">Chưa có ai xác nhận.</p>
-        <div class="sync">
-          <button type="button" class="btn btn-sm" id="syncBtn">Đẩy sang Google Sheet</button>
-          <a class="sheet-link" href="https://docs.google.com/spreadsheets/d/1GWEib78iVxkPiRdk--mwMEB7ZpsBfnLBbV2VYKSuuEI/edit?gid=0#gid=0" target="_blank" rel="noopener">Mở bảng tính</a>
-        </div>
-        <p class="sub" id="syncMsg" role="status" aria-live="polite"></p>
-      </div>
     </section>
 
     <div class="motif" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-bauble2"/></svg><svg class="tw d3" viewBox="0 0 24 24"><use href="#i-snow"/></svg><svg class="big tw" viewBox="0 0 24 24"><use href="#i-star"/></svg><svg class="tw d2" viewBox="0 0 24 24"><use href="#i-snow"/></svg><svg viewBox="0 0 24 24"><use href="#i-bauble"/></svg></div>
@@ -563,131 +556,51 @@ h2 small{display:block; font:500 .95rem/1.4 var(--sans); color:var(--muted); mar
   }
   tick();
 
-  /* ---------- Xác nhận tham gia: lưu lại + đẩy sang Google Sheet ---------- */
-  var SHEET_ID = '1GWEib78iVxkPiRdk--mwMEB7ZpsBfnLBbV2VYKSuuEI';
-  var SHEET_RANGE = "'Trang tính1'!A1";
-  var db = null, user = null, mcp = null, uid = null, myDoc = null, busy = false, isOwner = false, lastDocs = [], syncing = false;
-  var NO_SAVE = 'Không gửi được xác nhận ở đây. Bạn hãy mở thiệp này trong Claude bằng tài khoản công ty, hoặc nhắn trực tiếp cho người mời nhé.';
+  /* ---------- Xác nhận tham gia: gửi thẳng vào Google Sheet qua Apps Script ---------- */
+  // DÁN ĐƯỜNG LINK WEB APP (kết thúc bằng /exec) VÀO GIỮA HAI DẤU NHÁY BÊN DƯỚI:
+  var SCRIPT_URL = '';
+
+  var KEY = 'giangsinh2026-rsvp', busy = false;
   function status(t){ $('status').textContent = t || ''; }
   function showDone(on){ $('rsvpForm').hidden = on; $('rsvpDone').hidden = !on; }
-  function fmtTime(ms){
-    try { return new Date(ms).toLocaleString('vi-VN', {timeZone:'Asia/Ho_Chi_Minh', hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'}); } catch(e){ return ''; }
-  }
-  // Ghi một dòng vào Google Sheet bằng kết nối Google Sheets của người đang xem
-  async function appendRows(rows){
-    if (!mcp) throw {code:'server_not_connected'};
-    return mcp.callTool('Google Sheets', 'append_values', { spreadsheetId:SHEET_ID, range:SHEET_RANGE, values:rows });
-  }
-  function sheetErrorText(e){
-    var c = e && e.code;
-    if (c === 'needs_reauth') return 'Kết nối Google Sheets đã hết hạn. Vào claude.ai → Cài đặt → Connectors để kết nối lại.';
-    if (c === 'server_not_connected') return 'Bạn chưa kết nối Google Sheets. Vào claude.ai → Cài đặt → Connectors để thêm Google Sheets.';
-    if (c === 'approval_required' || c === 'not_in_manifest') return 'Thiệp cần bạn cho phép dùng Google Sheets. Bấm nút đẩy sang Sheet để cho phép.';
-    if (c === 'blocked_by_policy') return 'Tổ chức của bạn đang chặn Google Sheets cho trang này.';
-    if (c === 'tool_error') return 'Google Sheets từ chối ghi. Kiểm tra lại quyền chỉnh sửa của bảng tính.';
-    if (c === 'server_unavailable' || c === 'upstream_error') return 'Google Sheets chưa phản hồi. Hãy mở bảng tính kiểm tra trước khi thử lại, vì dòng có thể đã được ghi.';
-    return 'Chưa đẩy được sang Google Sheet.';
+  function saved(){ try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch(e){ return null; } }
+  function save(v){ try { v ? localStorage.setItem(KEY, JSON.stringify(v)) : localStorage.removeItem(KEY); } catch(e){} }
+
+  async function send(payload){
+    if (!SCRIPT_URL) throw new Error('no_url');
+    var ctl = ('AbortController' in window) ? new AbortController() : null;
+    var t = setTimeout(function(){ if (ctl) ctl.abort(); }, 20000);
+    try {
+      // Không đặt Content-Type để trình duyệt gửi text/plain (tránh lỗi CORS với Apps Script)
+      var res = await fetch(SCRIPT_URL, { method:'POST', body:JSON.stringify(payload), signal: ctl ? ctl.signal : undefined, redirect:'follow' });
+      var out = await res.json();
+      if (!out || !out.ok) throw new Error((out && out.error) || 'server');
+    } finally { clearTimeout(t); }
   }
 
-  // Khách tự đẩy dòng của mình (nếu họ có kết nối Google Sheets); không được thì chủ tiệc sẽ đồng bộ sau
-  async function pushMine(going, at){
-    if (!mcp || !user) return;
-    try {
-      var me = await user.me();
-      await appendRows([[fmtTime(at), me.name || 'Không rõ tên', me.email || '', going ? 'Tham gia' : 'Huỷ tham gia']]);
-      await myDoc.update({ sheet:true });
-    } catch(e){ /* để chủ tiệc đồng bộ */ }
-  }
+  var me = saved();
+  if (me){ showDone(true); $('fname').value = me.name || ''; $('dept').value = me.dept || ''; }
 
   $('confirm').addEventListener('click', async function(){
     if (busy) return;
-    if (!db || !myDoc){ status(NO_SAVE); return; }
-    var btn = this, at = Date.now();
-    busy = true; btn.disabled = true; status('Đang gửi xác nhận…');
+    var name = $('fname').value.trim(), dept = $('dept').value.trim();
+    if (!name){ status('Bạn điền họ và tên giúp mình nhé.'); $('fname').focus(); return; }
+    var btn = this; busy = true; btn.disabled = true; status('Đang gửi xác nhận…');
     try {
-      await myDoc.set({ going:true, at:at, sheet:false });
-      showDone(true); status('');
-      pushMine(true, at);
+      await send({ name:name, dept:dept, status:'yes' });
+      save({ name:name, dept:dept }); showDone(true); status('');
     } catch(e){
-      status(e && e.code === 'unavailable' ? 'Mạng đang chập chờn, bạn thử lại sau ít phút nhé.' : NO_SAVE);
+      status(e.message === 'no_url' ? 'Thiệp chưa được nối với Google Sheet. Bạn nhắn trực tiếp cho người mời nhé.'
+        : 'Chưa gửi được, có thể do mạng. Bạn thử lại sau ít phút nhé.');
     }
     busy = false; btn.disabled = false;
   });
   $('cancel').addEventListener('click', async function(){
-    if (busy || !myDoc) return; busy = true; status('Đang huỷ…');
-    var at = Date.now();
-    try { await myDoc.set({ going:false, at:at, sheet:false }); showDone(false); status('Đã huỷ xác nhận.'); pushMine(false, at); }
-    catch(e){ status('Chưa huỷ được, bạn thử lại nhé.'); }
+    if (busy) return; var cur = saved() || {}; busy = true; status('Đang huỷ…');
+    try { await send({ name:cur.name || $('fname').value.trim(), dept:cur.dept || '', status:'cancel' }); save(null); showDone(false); status('Đã huỷ xác nhận.'); }
+    catch(e){ status('Chưa huỷ được, bạn thử lại sau ít phút nhé.'); }
     busy = false;
   });
-
-  // Chủ tiệc: danh sách + đồng bộ các xác nhận chưa có trong Sheet
-  async function syncPending(fromClick){
-    if (!isOwner || syncing) return;
-    var pending = lastDocs.filter(function(d){ var x = d.data(); return x && !x.sheet && x.at; });
-    if (!pending.length){ if (fromClick) $('syncMsg').textContent = 'Google Sheet đã có đủ tất cả xác nhận.'; return; }
-    syncing = true; $('syncBtn').disabled = true; $('syncMsg').textContent = 'Đang đẩy ' + pending.length + ' dòng sang Google Sheet…';
-    try {
-      var lock = await db.doc('meta/sync').acquire({ holder: uid + ':' + Math.random().toString(36).slice(2), ttlMs:30000 });
-      if (!lock.acquired){ $('syncMsg').textContent = 'Một cửa sổ khác đang đồng bộ, thử lại sau ít giây.'; return; }
-      pending.sort(function(a,b){ return a.data().at - b.data().at; });
-      var ps = await user.profiles(pending.map(function(d){ return d.id; }));
-      var rows = pending.map(function(d){ var x = d.data(), pr = ps[d.id] || {}; return [fmtTime(x.at), pr.name || 'Không rõ tên', pr.email || '', x.going ? 'Tham gia' : 'Huỷ tham gia']; });
-      await appendRows(rows);
-      for (var i = 0; i < pending.length; i++){ try { await db.doc('rsvps/' + pending[i].id).update({ sheet:true }); } catch(e){} }
-      $('syncMsg').textContent = 'Đã đẩy ' + rows.length + ' dòng sang Google Sheet.';
-    } catch(e){
-      $('syncMsg').textContent = sheetErrorText(e);
-    } finally {
-      syncing = false; $('syncBtn').disabled = false;
-    }
-  }
-  $('syncBtn').addEventListener('click', function(){ syncPending(true); });
-
-  var autoSynced = false;
-  async function renderList(docs){
-    lastDocs = docs;
-    var going = docs.filter(function(d){ var x = d.data(); return x && x.going; });
-    var tally = $('tally');
-    if (going.length){ tally.hidden = false; tally.textContent = 'Đã có ' + going.length + ' người xác nhận tham gia.'; }
-    else tally.hidden = true;
-    if (!isOwner) return;
-    var pending = docs.filter(function(d){ var x = d.data(); return x && !x.sheet && x.at; }).length;
-    $('syncBtn').textContent = pending ? 'Đẩy ' + pending + ' xác nhận mới sang Google Sheet' : 'Google Sheet đã cập nhật đủ';
-    var ul = $('guests'); $('noGuests').hidden = going.length > 0;
-    going.sort(function(a,b){ return (a.data().at||0) - (b.data().at||0); });
-    var ps = {};
-    try { ps = await user.profiles(going.map(function(d){ return d.id; })); } catch(e){}
-    ul.textContent = '';
-    going.forEach(function(d){
-      var x = d.data(), pr = ps[d.id] || {};
-      var li = document.createElement('li');
-      var img = document.createElement('img'); img.alt = ''; if (pr.avatarUrl) img.src = pr.avatarUrl; li.appendChild(img);
-      var bx = document.createElement('div');
-      var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = pr.name || 'Một khách mời'; bx.appendChild(nm);
-      var meta = document.createElement('span'); meta.className = 'meta'; meta.textContent = 'Xác nhận lúc ' + fmtTime(x.at) + (x.sheet ? ' · đã có trong Sheet' : ' · chưa có trong Sheet'); bx.appendChild(meta);
-      li.appendChild(bx); ul.appendChild(li);
-    });
-    if (!autoSynced && pending){ autoSynced = true; syncPending(false); }
-  }
-
-  (async function initRsvp(){
-    if (!window.claude || !claude.use) return;
-    try { db = await claude.use('db'); user = await claude.use('user'); } catch(e){}
-    try { mcp = await claude.use('mcp'); } catch(e){ mcp = null; }
-    if (!db) return;
-    if (user){ try { uid = await user.id(); isOwner = await user.isOwner(); } catch(e){} }
-    if (isOwner) $('host').hidden = false;
-    if (uid){
-      myDoc = db.doc('rsvps/' + uid);
-      try { var snap0 = await myDoc.get(); if (snap0.exists && snap0.data().going) showDone(true); } catch(e){}
-    }
-    var loadTimer = setTimeout(function(){ if (isOwner) $('noGuests').textContent = 'Chưa tải được danh sách, có thể do mạng. Danh sách sẽ tự hiện khi kết nối lại.'; }, 10000);
-    db.collection('rsvps').onSnapshot(function(snap){
-      if (!snap.metadata.fromCache){ clearTimeout(loadTimer); $('noGuests').textContent = 'Chưa có ai xác nhận.'; }
-      renderList(snap.docs);
-    }, function(){ clearTimeout(loadTimer); });
-  })();
 })();
 </script>
 </body>
